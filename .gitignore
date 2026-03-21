@@ -1,0 +1,30 @@
+# Environment & secrets
+.env
+credentials.json
+token.json
+
+# Temporary / intermediate files
+.tmp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Setup and SOPs
+setup.md
+directives/
+specs/
