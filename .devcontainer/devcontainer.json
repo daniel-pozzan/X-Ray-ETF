@@ -1,7 +1,8 @@
 {
   "name": "X-Ray ETF Workspace",
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    "context": ".."
   },
   "customizations": {
     "vscode": {
