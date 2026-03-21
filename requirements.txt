@@ -3,4 +3,4 @@ uvicorn
 requests
 beautifulsoup4
 pandas
-duckduckgo-search
+ddgs

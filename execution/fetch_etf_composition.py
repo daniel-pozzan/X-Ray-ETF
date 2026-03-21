@@ -4,8 +4,12 @@ import logging
 import requests
 import pandas as pd
 import io
+import os
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
 
 # Set up logging to stderr so stdout is strictly json
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
@@ -14,16 +18,38 @@ logger = logging.getLogger(__name__)
 def fetch_etf_composition(isin: str):
     logger.info(f"Looking for ETF with ISIN: {isin}")
     
+    results = []
     # Use DDGS to find the ETF page
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(f'site:ishares.com "{isin}"', max_results=5))
+        with DDGS() as ddgs_client:
+            results = list(ddgs_client.text(f'site:ishares.com "{isin}"', max_results=5))
     except Exception as e:
-        logger.error(f"Error using DDGS: {e}")
-        sys.exit(1)
+        logger.warning(f"Error using DDGS: {e}. Attempting manual HTML fallback.")
 
     if not results:
-        logger.error(f"No results found for ISIN {isin}")
+        logger.info("DDGS library yielded no results or failed. Using html.duckduckgo.com POST fallback.")
+        try:
+            fallback_resp = requests.post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": f'site:ishares.com "{isin}"'},
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'},
+                timeout=15
+            )
+            fallback_resp.raise_for_status()
+            fallback_soup = BeautifulSoup(fallback_resp.text, 'html.parser')
+            for a in fallback_soup.find_all('a', class_='result__url'):
+                href = a.get('href')
+                if href and 'ishares.com' in href:
+                    # Clean DuckDuckGo redirect url if necessary
+                    if href.startswith('//duckduckgo.com/l/?uddg='):
+                        from urllib.parse import unquote
+                        href = unquote(href.split('uddg=')[1].split('&')[0])
+                    results.append({'href': href})
+        except Exception as e:
+            logger.error(f"Fallback HTTP POST search failed: {e}")
+
+    if not results:
+        logger.error(f"No results found for ISIN {isin} even with fallback.")
         sys.exit(1)
 
     # Filter for product pages
@@ -98,6 +124,17 @@ def fetch_etf_composition(isin: str):
 
     # Decode and parse CSV
     content = csv_resp.content.decode('utf-8-sig') # Handle BOM if present
+    
+    # Save raw CSV for debugging
+    tmp_path = os.path.join(os.path.dirname(__file__), '..', '.tmp', f"{isin}_composition.csv")
+    try:
+        os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        logger.info(f"Saved raw CSV to {tmp_path}")
+    except Exception as e:
+        logger.warning(f"Could not save debug CSV: {e}")
+
     lines = content.splitlines()
     
     # Find start of table
