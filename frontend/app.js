@@ -20,6 +20,10 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch(`/api/etf/${isin}`);
             if (!response.ok) {
+                if (response.status === 404) {
+                    window.location.href = '/static/not-found.html';
+                    return;
+                }
                 const err = await response.json();
                 throw new Error(err.detail || 'Failed to fetch ETF data');
             }

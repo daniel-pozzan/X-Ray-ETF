@@ -50,7 +50,7 @@ def fetch_etf_composition(isin: str):
 
     if not results:
         logger.error(f"No results found for ISIN {isin} even with fallback.")
-        sys.exit(1)
+        sys.exit(2)
 
     # Filter for product pages
     product_url = None
@@ -92,6 +92,10 @@ def fetch_etf_composition(isin: str):
     except Exception as e:
         logger.error(f"Failed to fetch iShares page: {e}")
         sys.exit(1)
+
+    if isin.upper() not in resp.text.upper():
+        logger.error(f"ISIN {isin} not found on the retrieved page. Likely not a supported iShares ETF.")
+        sys.exit(2)
 
     soup = BeautifulSoup(resp.text, 'html.parser')
     

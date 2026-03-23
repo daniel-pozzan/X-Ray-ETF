@@ -32,7 +32,10 @@ async def get_etf_composition(isin: str):
     
     stdout, stderr = await process.communicate()
     
-    if process.returncode != 0:
+    if process.returncode == 2:
+        logger.warning(f"ETF Not Found or Not Supported: {isin}")
+        raise HTTPException(status_code=404, detail="ETF Not Found or Not Supported")
+    elif process.returncode != 0:
         logger.error(f"Script failed with stderr: {stderr.decode()}")
         raise HTTPException(status_code=500, detail="Failed to fetch composition. Check logs.")
         
