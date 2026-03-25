@@ -1,59 +1,115 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>X-Ray ETF Explorer</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>X-Ray ETF – Look Inside Any ETF</title>
+    <meta name="description" content="Enter any ETF ISIN to get a detailed breakdown of its holdings, sector allocation, and weights." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-    <div class="background-blob"></div>
-    <div class="background-blob blob-2"></div>
-    
-    <div class="container">
-        <header>
-            <h1><span class="gradient-text">X-Ray</span> ETF</h1>
-            <p>Discover the exhaustive composition behind any ETF</p>
-        </header>
 
-        <div class="search-container glass-panel">
-            <input type="text" id="isin-input" placeholder="Enter ISIN (e.g. IE00B4L5Y983)" autocomplete="off" />
-            <button id="search-btn">Analyze</button>
-        </div>
-
-        <div id="loader" class="hidden">
-            <div class="spinner"></div>
-            <p>Scanning markets...</p>
-        </div>
-
-        <div id="error-message" class="hidden"></div>
-
-        <div id="results-container" class="hidden glass-panel">
-            <div class="results-header">
-                <h2 id="etf-title">Composition</h2>
-                <div class="stats" id="etf-stats"></div>
-            </div>
-            
-            <div class="table-container">
-                <table id="holdings-table">
-                    <thead>
-                        <tr>
-                            <th>Ticker</th>
-                            <th>Name</th>
-                            <th>Sector</th>
-                            <th class="right-align">Weight (%)</th>
-                            <th>Bar</th>
-                        </tr>
-                    </thead>
-                    <tbody id="holdings-body">
-                        <!-- Rows injected via JS -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
+    <!-- ░░░ AD PLACEHOLDER – HEADER BANNER ░░░ -->
+    <div class="ad-placeholder ad-header" id="ad-header" aria-label="Advertisement">
+        <span>Advertisement</span>
+        <!-- AdSense: Replace this div with your <ins class="adsbygoogle"> tag -->
     </div>
-    
+
+    <!-- ░░░ MAIN LAYOUT ░░░ -->
+    <div class="layout">
+
+        <!-- ░░░ AD PLACEHOLDER – SIDEBAR LEFT ░░░ -->
+        <aside class="ad-sidebar ad-placeholder" id="ad-sidebar" aria-label="Advertisement">
+            <span>Advertisement</span>
+            <!-- AdSense: Replace this div with your <ins class="adsbygoogle"> tag -->
+        </aside>
+
+        <!-- ░░░ CONTENT ░░░ -->
+        <main class="content">
+            <header class="hero">
+                <h1 class="logo">X-Ray <span class="accent">ETF</span></h1>
+                <p class="tagline">Look inside any ETF — enter an ISIN to reveal all holdings.</p>
+            </header>
+
+            <!-- Search -->
+            <section class="search-section" aria-label="ETF Search">
+                <form id="search-form" autocomplete="off">
+                    <div class="search-bar">
+                        <input
+                            type="text"
+                            id="isin-input"
+                            placeholder="e.g. IE00B4L5Y983"
+                            maxlength="12"
+                            aria-label="ETF ISIN"
+                            spellcheck="false"
+                        />
+                        <button type="submit" id="search-btn">Analyse</button>
+                    </div>
+                </form>
+            </section>
+
+            <!-- Status messages -->
+            <div id="status-box" class="status-box hidden" role="alert"></div>
+
+            <!-- Partial data warning -->
+            <div id="partial-warning" class="partial-warning hidden" role="status">
+                ⚠️ <strong>Partial data:</strong> Only a subset of holdings could be retrieved. Weights may not sum to 100%.
+            </div>
+
+            <!-- Cache badge -->
+            <div id="cache-badge" class="cache-badge hidden">
+                ⚡ Loaded from cache
+            </div>
+
+            <!-- Results -->
+            <section id="results" class="results hidden">
+                <div class="results-meta">
+                    <h2 id="result-title">Holdings</h2>
+                    <span id="holdings-count" class="badge"></span>
+                </div>
+
+                <!-- Chart + Summary grid -->
+                <div class="chart-area">
+                    <div class="chart-wrapper">
+                        <canvas id="sector-chart" aria-label="Sector allocation pie chart"></canvas>
+                    </div>
+                    <div id="sector-legend" class="sector-legend"></div>
+                </div>
+
+                <!-- Table -->
+                <div class="table-wrapper">
+                    <table id="holdings-table" aria-label="ETF Holdings">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-col="name" id="th-name">
+                                    Company <span class="sort-icon" aria-hidden="true">⇅</span>
+                                </th>
+                                <th class="sortable" data-col="weight" id="th-weight">
+                                    Weight % <span class="sort-icon" aria-hidden="true">⇅</span>
+                                </th>
+                                <th class="sortable" data-col="sector" id="th-sector">
+                                    Sector <span class="sort-icon" aria-hidden="true">⇅</span>
+                                </th>
+                                <th>Ticker</th>
+                            </tr>
+                        </thead>
+                        <tbody id="holdings-body"></tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- ░░░ AD PLACEHOLDER – FOOTER BANNER ░░░ -->
+    <footer class="ad-placeholder ad-footer" id="ad-footer" aria-label="Advertisement">
+        <span>Advertisement</span>
+        <!-- AdSense: Replace this div with your <ins class="adsbygoogle"> tag -->
+    </footer>
+
     <script src="/static/app.js"></script>
 </body>
 </html>

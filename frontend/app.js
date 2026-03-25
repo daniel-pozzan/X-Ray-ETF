@@ -1,77 +1,191 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const input = document.getElementById('isin-input');
-    const searchBtn = document.getElementById('search-btn');
-    const loader = document.getElementById('loader');
-    const resultsContainer = document.getElementById('results-container');
-    const errorMsg = document.getElementById('error-message');
-    const tbody = document.getElementById('holdings-body');
-    const stats = document.getElementById('etf-stats');
+/**
+ * X-Ray ETF - Frontend Application Logic
+ */
 
-    const search = async () => {
-        const isin = input.value.trim().toUpperCase();
-        if (!isin) return;
+// ──────────────────────────────────────────────
+//  State Management
+// ──────────────────────────────────────────────
+let currentHoldings = [];
+let sectorChart = null;
+let currentSort = { col: 'weight', dir: -1 }; // Default: Weight descending
 
-        // Reset state
-        loader.classList.remove('hidden');
-        resultsContainer.classList.add('hidden');
-        errorMsg.classList.add('hidden');
-        tbody.innerHTML = '';
+const DOM = {
+    form: document.getElementById('search-form'),
+    input: document.getElementById('isin-input'),
+    btn: document.getElementById('search-btn'),
+    statusBox: document.getElementById('status-box'),
+    results: document.getElementById('results'),
+    tableBody: document.getElementById('holdings-body'),
+    holdingsCount: document.getElementById('holdings-count'),
+    partialWarning: document.getElementById('partial-warning'),
+    cacheBadge: document.getElementById('cache-badge'),
+    sectorLegend: document.getElementById('sector-legend'),
+    sortableTh: document.querySelectorAll('.sortable')
+};
 
-        try {
-            const response = await fetch(`/api/etf/${isin}`);
-            if (!response.ok) {
-                if (response.status === 404) {
-                    window.location.href = '/static/not-found.html';
-                    return;
-                }
-                const err = await response.json();
-                throw new Error(err.detail || 'Failed to fetch ETF data');
-            }
+// ──────────────────────────────────────────────
+//  Initialization
+// ──────────────────────────────────────────────
+DOM.form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const isin = DOM.input.value.trim().toUpperCase();
+    if (!isin || isin.length < 5) return;
+    await fetchComposition(isin);
+});
 
-            const data = await response.json();
-            renderResults(data);
-        } catch (error) {
-            errorMsg.textContent = error.message;
-            errorMsg.classList.remove('hidden');
-        } finally {
-            loader.classList.add('hidden');
+DOM.sortableTh.forEach(th => {
+    th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (currentSort.col === col) {
+            currentSort.dir *= -1;
+        } else {
+            currentSort.col = col;
+            currentSort.dir = col === 'weight' ? -1 : 1; 
         }
-    };
+        renderTable();
+    });
+});
 
-    searchBtn.addEventListener('click', search);
-    input.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') search();
+// ──────────────────────────────────────────────
+//  Data Fetching
+// ──────────────────────────────────────────────
+async function fetchComposition(isin) {
+    showStatus('Analyzing ETF structure...', 'loading');
+    DOM.results.classList.add('hidden');
+    DOM.partialWarning.classList.add('hidden');
+    DOM.cacheBadge.classList.add('hidden');
+    DOM.btn.disabled = true;
+
+    try {
+        const response = await fetch(`/api/etf/${isin}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.detail || 'Failed to retrieve data');
+        }
+
+        currentHoldings = data.holdings;
+        
+        // UI Updates
+        DOM.statusBox.classList.add('hidden');
+        DOM.results.classList.remove('hidden');
+        DOM.holdingsCount.textContent = `${currentHoldings.length} holdings found`;
+        
+        if (data.partialData) DOM.partialWarning.classList.remove('hidden');
+        if (data.fromCache) DOM.cacheBadge.classList.remove('hidden');
+
+        renderTable();
+        renderChart();
+
+    } catch (err) {
+        showStatus(err.message, 'error');
+    } finally {
+        DOM.btn.disabled = false;
+    }
+}
+
+function showStatus(msg, type) {
+    DOM.statusBox.textContent = msg;
+    DOM.statusBox.className = `status-box status-${type}`;
+    DOM.statusBox.classList.remove('hidden');
+}
+
+// ──────────────────────────────────────────────
+//  Rendering Logic
+// ──────────────────────────────────────────────
+function renderTable() {
+    // Sort
+    const sorted = [...currentHoldings].sort((a, b) => {
+        let valA = a[currentSort.col];
+        let valB = b[currentSort.col];
+        
+        if (typeof valA === 'string') {
+            valA = valA.toLowerCase();
+            valB = valB.toLowerCase();
+        }
+        
+        if (valA < valB) return -1 * currentSort.dir;
+        if (valA > valB) return 1 * currentSort.dir;
+        return 0;
     });
 
-    function renderResults(data) {
-        const holdings = data.holdings;
-        stats.textContent = `${holdings.length} holdings found`;
+    // Body
+    DOM.tableBody.innerHTML = sorted.map(h => `
+        <tr>
+            <td><strong>${h.name}</strong></td>
+            <td class="row-weight">${h.weight.toFixed(2)}%</td>
+            <td>${h.sector}</td>
+            <td class="row-ticker">${h.ticker}</td>
+        </tr>
+    `).join('');
+}
 
-        // Sort by weight descending
-        holdings.sort((a, b) => b.weight - a.weight);
+function renderChart() {
+    // Aggregate by sector
+    const sectors = {};
+    currentHoldings.forEach(h => {
+        const s = h.sector || 'Others';
+        sectors[s] = (sectors[s] || 0) + h.weight;
+    });
 
-        const maxWeight = holdings[0]?.weight || 100;
+    // Prepare data
+    const sortedSectors = Object.entries(sectors)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8); // Top 8 + Others
+    
+    const othersWeight = Object.entries(sectors)
+        .sort((a, b) => b[1] - a[1])
+        .slice(8)
+        .reduce((sum, curr) => sum + curr[1], 0);
 
-        holdings.forEach((h, index) => {
-            const tr = document.createElement('tr');
-            tr.style.animation = `fadeInUp 0.3s ease-out ${index % 50 * 0.02}s both`; // Limiting animation delay for very long lists
-
-            const fillWidth = (h.weight / maxWeight) * 100;
-
-            tr.innerHTML = `
-                <td><span class="ticker-badge">${h.ticker !== '-' ? h.ticker : 'CASH'}</span></td>
-                <td style="font-weight: 500;">${h.name}</td>
-                <td style="color: var(--text-secondary); font-size: 0.9rem;">${h.sector}</td>
-                <td class="right-align weight-cell">${h.weight.toFixed(2)}%</td>
-                <td style="width: 150px;">
-                    <div class="bar-bg">
-                        <div class="bar-fill" style="width: ${fillWidth}%"></div>
-                    </div>
-                </td>
-            `;
-            tbody.appendChild(tr);
-        });
-
-        resultsContainer.classList.remove('hidden');
+    if (othersWeight > 0) {
+        sortedSectors.push(['Others', othersWeight]);
     }
-});
+
+    const labels = sortedSectors.map(s => s[0]);
+    const values = sortedSectors.map(s => s[1]);
+
+    // Colors
+    const colors = [
+        '#58a6ff', '#f78166', '#3fb950', '#a371f7', 
+        '#d29922', '#1f6feb', '#ff7b72', '#79c0ff', '#8b949e'
+    ];
+
+    if (sectorChart) sectorChart.destroy();
+
+    const ctx = document.getElementById('sector-chart').getContext('2d');
+    sectorChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: values,
+                backgroundColor: colors,
+                borderWidth: 0,
+                hoverOffset: 15
+            }]
+        },
+        options: {
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ` ${ctx.label}: ${ctx.raw.toFixed(2)}%`
+                    }
+                }
+            },
+            cutout: '70%',
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    });
+
+    // Custom Legend
+    DOM.sectorLegend.innerHTML = sortedSectors.map((s, i) => `
+        <div class="legend-item">
+            <span class="legend-color" style="background: ${colors[i % colors.length]}"></span>
+            <span class="legend-label">${s[0]}</span>
+            <span class="badge" style="margin-left:auto">${s[1].toFixed(1)}%</span>
+        </div>
+    `).join('');
+}
