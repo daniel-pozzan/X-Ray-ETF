@@ -110,18 +110,77 @@ def fetch_via_etfpy(identifier: str) -> list | None:
         return None
 
 
+def fetch_via_yfinance_direct(identifier: str) -> list | None:
+    """
+    Attempt to retrieve ETF holdings directly from yfinance metadata (funds_data or info['holdings']).
+    """
+    try:
+        import yfinance as yf
+        logger.info(f"[💹 yfinance] Attempting direct holdings extraction for {identifier}")
+        ticker = yf.Ticker(identifier)
+        
+        holdings_list = []
+        
+        # Method A: funds_data (Modern yfinance)
+        try:
+            if hasattr(ticker, 'funds_data') and ticker.funds_data and hasattr(ticker.funds_data, 'top_holdings'):
+                df = ticker.funds_data.top_holdings
+                if df is not None and not df.empty:
+                    logger.info(f"[💹 yfinance] Found holdings via funds_data.top_holdings")
+                    for symbol, row in df.iterrows():
+                        holdings_list.append({
+                            "ticker": str(symbol),
+                            "name": str(row.get('Name', symbol)),
+                            "weight": safe_float(row.get('Holding', 0.0)) * 100, # yfinance often uses 0.0-1.0
+                            "sector": "-" # yfinance top_holdings usually lacks sectors
+                        })
+                    return holdings_list
+        except Exception as e:
+            logger.debug(f"[💹 yfinance] funds_data check failed: {e}")
+
+        # Method B: info['holdings'] (Traditional)
+        info = ticker.info
+        raw_holdings = info.get('holdings')
+        if raw_holdings and isinstance(raw_holdings, list):
+            logger.info(f"[💹 yfinance] Found holdings via info['holdings']")
+            for h in raw_holdings:
+                holdings_list.append({
+                    "ticker": h.get("symbol", "-"),
+                    "name": h.get("holdingName", h.get("symbol", "-")),
+                    "weight": safe_float(h.get("holdingPercent", 0.0)) * 100,
+                    "sector": "-"
+                })
+            return holdings_list
+
+        logger.warning(f"[💹 yfinance] No direct holdings data found for {identifier}")
+        return None
+
+    except Exception as e:
+        logger.warning(f"[💹 yfinance] Direct extraction failed for {identifier}: {e}")
+        return None
+
+
 def fetch_etf_composition(isin: str):
-    # Step 1: Try ISIN directly
+    # Step 1: Try ISIN directly via etfpy
     holdings = fetch_via_etfpy(isin)
 
-    # Step 2: Fallback — resolve ISIN to Ticker via yfinance, then retry
+    # Step 2: Try resolve ISIN to Ticker, then retry etfpy
+    ticker = None
     if holdings is None:
         ticker = isin_to_ticker(isin)
         if ticker:
             holdings = fetch_via_etfpy(ticker)
 
+    # Step 3: NEW Fallback — direct yfinance extraction (highest coverage, last resort)
     if holdings is None:
-        logger.error(f"[❌ Not Found] No holdings found for ISIN {isin} via etfpy or yfinance fallback.")
+        # Try it for the ISIN first
+        holdings = fetch_via_yfinance_direct(isin)
+        # If still none and we found a ticker, try the ticker
+        if holdings is None and ticker:
+            holdings = fetch_via_yfinance_direct(ticker)
+
+    if holdings is None:
+        logger.error(f"[❌ Not Found] No holdings found for ISIN {isin} via etfpy or direct yfinance fallback.")
         sys.exit(2)
 
     print(json.dumps(holdings))
