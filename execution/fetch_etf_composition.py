@@ -145,6 +145,7 @@ def fetch_via_etfpy(identifier: str) -> list | None:
 def fetch_via_yfinance_direct(identifier: str) -> list | None:
     """
     Attempt to retrieve ETF holdings directly from yfinance metadata.
+    Note: yfinance typically only provides the top 10 holdings.
     """
     try:
         import yfinance as yf
@@ -153,33 +154,66 @@ def fetch_via_yfinance_direct(identifier: str) -> list | None:
         
         holdings_list = []
         
-        # Try funds_data (Modern yfinance)
+        # Method A: funds_data (Modern yfinance)
         try:
             if hasattr(ticker, 'funds_data') and ticker.funds_data and hasattr(ticker.funds_data, 'top_holdings'):
                 df = ticker.funds_data.top_holdings
                 if df is not None and not df.empty:
+                    logger.info(f"[💹 yfinance] Found holdings via funds_data.top_holdings (Note: Provider limit 10 items)")
+                    
+                    # Normalize columns for flexible mapping
+                    df.columns = df.columns.astype(str).str.lower().str.strip()
+                    
+                    # Map name and weight columns
+                    name_col = next((c for c in df.columns if 'name' in c or 'holding' in c), None)
+                    weight_col = next((c for c in df.columns if any(p in c for p in ['weight', 'allocation', 'percent', '%'])), None)
+                    
                     for symbol, row in df.iterrows():
+                        w = safe_float(row.get(weight_col, 0.0))
                         holdings_list.append({
                             "ticker": str(symbol),
-                            "name": str(row.get('Name', symbol)),
-                            "weight": safe_float(row.get('Holding', 0.0)) * 100,
+                            "name": str(row.get(name_col, symbol)),
+                            "weight": w,
                             "sector": "-"
                         })
+                    
+                    # Normalization: if all weights < 1.0, they are likely decimals (0.05 -> 5.0)
+                    if holdings_list and all(float(h["weight"]) < 1.0 for h in holdings_list):
+                        logger.info(f"[💹 yfinance] Normalizing decimal weights to percentages")
+                        for h in holdings_list:
+                            h["weight"] = float(h["weight"]) * 100
+                            
                     return holdings_list
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[💹 yfinance] funds_data check failed: {e}")
 
-        # Try info['holdings'] (Traditional)
+        # Method B: info['holdings'] (Traditional)
         info = ticker.info
         raw_holdings = info.get('holdings')
         if raw_holdings and isinstance(raw_holdings, list):
+            logger.info(f"[💹 yfinance] Found holdings via info['holdings'] (Note: Provider limit 10 items)")
             for h in raw_holdings:
+                # Case-insensitive key lookup
+                h_low = {str(k).lower(): v for k, v in h.items()}
+                
+                # Fetch weight using multiple possible keys
+                w = safe_float(next((v for k, v in h_low.items() if any(p in k for p in ['percent', 'weight', 'allocation'])), 0.0))
+                # Fetch name
+                name = h_low.get("holdingname", h_low.get("name", h_low.get("symbol", "-")))
+                
                 holdings_list.append({
-                    "ticker": h.get("symbol", "-"),
-                    "name": h.get("holdingName", h.get("symbol", "-")),
-                    "weight": safe_float(h.get("holdingPercent", 0.0)) * 100,
+                    "ticker": h_low.get("symbol", "-").strip() or "-",
+                    "name": name,
+                    "weight": w,
                     "sector": "-"
                 })
+            
+            # Normalization
+            if holdings_list and all(float(h["weight"]) < 1.0 for h in holdings_list):
+                logger.info(f"[💹 yfinance] Normalizing decimal weights to percentages")
+                for h in holdings_list:
+                    h["weight"] = float(h["weight"]) * 100
+                    
             return holdings_list
 
         return None
