@@ -3,9 +3,26 @@ import json
 import logging
 import os
 
-# Set up logging to stderr so stdout is strictly JSON
-logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s: %(message)s")
+# 1. Clear ANY existing logging handlers to prevent leaks to stdout
+root_logger = logging.getLogger()
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+
+# 2. Configure logging strictly to stderr
+# 'force=True' ensures this overrides any default config from dependencies
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stderr,
+    format="%(levelname)s: %(message)s",
+    force=True
+)
 logger = logging.getLogger(__name__)
+
+# 3. Silence noisy dependencies or ensure they use root config
+for module in ["peewee", "yfinance", "urllib3", "requests"]:
+    m_logger = logging.getLogger(module)
+    m_logger.setLevel(logging.WARNING)
+    m_logger.propagate = True
 
 
 def safe_float(val) -> float:
@@ -19,7 +36,9 @@ def safe_float(val) -> float:
     except Exception:
         pass
     try:
-        return float(str(val).replace("%", "").replace(",", ".").strip())
+        # Handle cases like "5,2%" or "5.2" or 5.2
+        s_val = str(val).replace("%", "").replace(",", ".").strip()
+        return float(s_val)
     except (ValueError, AttributeError):
         return 0.0
 
@@ -27,27 +46,42 @@ def safe_float(val) -> float:
 def isin_to_ticker(isin: str) -> str | None:
     """
     Use yfinance to resolve an ISIN to a Ticker symbol.
-    Returns the ticker string or None if not found.
+    Tries direct lookup and Search API.
     """
     try:
         import yfinance as yf
-        logger.info(f"[🔄 Fallback] Attempting ISIN→Ticker conversion via yfinance for {isin}")
+        logger.info(f"[🔄 Fallback] Attempting ISIN→Ticker conversion for {isin}")
+        
+        # Method A: Direct Ticker (some ISINs work directly if known as symbols)
         result = yf.Ticker(isin)
-        info = result.info
-        # yfinance returns the ticker in 'symbol' if it resolves successfully
-        symbol = info.get("symbol")
-        if symbol and symbol.upper() != isin.upper():
-            logger.info(f"[🔄 Fallback] Resolved {isin} → {symbol}")
-            return symbol
+        try:
+            symbol = result.info.get("symbol")
+            if symbol and symbol.upper() != isin.upper():
+                logger.info(f"[🔄 Fallback] Resolved via info: {isin} → {symbol}")
+                return symbol
+        except Exception:
+            pass
+
+        # Method B: Search API (more reliable for ISINs)
+        try:
+            search = yf.Search(isin, max_results=3)
+            if search.quotes:
+                # Pick the first one that looks like a valid ticker
+                symbol = search.quotes[0].get('symbol')
+                if symbol:
+                    logger.info(f"[🔄 Fallback] Resolved via search: {isin} → {symbol}")
+                    return symbol
+        except Exception as se:
+            logger.debug(f"[🔄 Fallback] yfinance Search failed: {se}")
+
     except Exception as e:
-        logger.warning(f"[🔄 Fallback] yfinance ISIN→Ticker failed for {isin}: {e}")
+        logger.warning(f"[🔄 Fallback] yfinance resolution failed for {isin}: {e}")
     return None
 
 
 def fetch_via_etfpy(identifier: str) -> list | None:
     """
     Attempt to retrieve ETF holdings using etfpy.
-    Returns a list of holding dicts or None on failure.
     """
     try:
         import etfpy
@@ -74,7 +108,7 @@ def fetch_via_etfpy(identifier: str) -> list | None:
                 col_map["sector"] = col
 
         if "name" not in col_map and "ticker" not in col_map:
-            logger.error(f"[📡 etfpy] Could not find name/ticker columns for {identifier}. Columns: {list(holdings_df.columns)}")
+            logger.error(f"[📡 etfpy] Missing required columns for {identifier}. Found: {list(holdings_df.columns)}")
             return None
 
         holdings = []
@@ -87,7 +121,6 @@ def fetch_via_etfpy(identifier: str) -> list | None:
             name_val = str(row.get(col_map.get("name", ""), "-")).strip() or "-"
             sector_val = str(row.get(col_map.get("sector", ""), "-")).strip() or "-"
 
-            # Skip cash/undefined rows
             if name_val in ("-", "", "nan", "None") and ticker_val in ("-", "", "nan", "None"):
                 continue
 
@@ -99,10 +132,9 @@ def fetch_via_etfpy(identifier: str) -> list | None:
             })
 
         if not holdings:
-            logger.warning(f"[📡 etfpy] Holdings list empty after filtering for {identifier}")
             return None
 
-        logger.info(f"[📡 etfpy] Successfully retrieved {len(holdings)} holdings for {identifier}")
+        logger.info(f"[📡 etfpy] Retrieved {len(holdings)} holdings for {identifier}")
         return holdings
 
     except Exception as e:
@@ -112,37 +144,35 @@ def fetch_via_etfpy(identifier: str) -> list | None:
 
 def fetch_via_yfinance_direct(identifier: str) -> list | None:
     """
-    Attempt to retrieve ETF holdings directly from yfinance metadata (funds_data or info['holdings']).
+    Attempt to retrieve ETF holdings directly from yfinance metadata.
     """
     try:
         import yfinance as yf
-        logger.info(f"[💹 yfinance] Attempting direct holdings extraction for {identifier}")
+        logger.info(f"[💹 yfinance] Attempting direct extraction for {identifier}")
         ticker = yf.Ticker(identifier)
         
         holdings_list = []
         
-        # Method A: funds_data (Modern yfinance)
+        # Try funds_data (Modern yfinance)
         try:
             if hasattr(ticker, 'funds_data') and ticker.funds_data and hasattr(ticker.funds_data, 'top_holdings'):
                 df = ticker.funds_data.top_holdings
                 if df is not None and not df.empty:
-                    logger.info(f"[💹 yfinance] Found holdings via funds_data.top_holdings")
                     for symbol, row in df.iterrows():
                         holdings_list.append({
                             "ticker": str(symbol),
                             "name": str(row.get('Name', symbol)),
-                            "weight": safe_float(row.get('Holding', 0.0)) * 100, # yfinance often uses 0.0-1.0
-                            "sector": "-" # yfinance top_holdings usually lacks sectors
+                            "weight": safe_float(row.get('Holding', 0.0)) * 100,
+                            "sector": "-"
                         })
                     return holdings_list
-        except Exception as e:
-            logger.debug(f"[💹 yfinance] funds_data check failed: {e}")
+        except Exception:
+            pass
 
-        # Method B: info['holdings'] (Traditional)
+        # Try info['holdings'] (Traditional)
         info = ticker.info
         raw_holdings = info.get('holdings')
         if raw_holdings and isinstance(raw_holdings, list):
-            logger.info(f"[💹 yfinance] Found holdings via info['holdings']")
             for h in raw_holdings:
                 holdings_list.append({
                     "ticker": h.get("symbol", "-"),
@@ -152,39 +182,48 @@ def fetch_via_yfinance_direct(identifier: str) -> list | None:
                 })
             return holdings_list
 
-        logger.warning(f"[💹 yfinance] No direct holdings data found for {identifier}")
         return None
-
     except Exception as e:
         logger.warning(f"[💹 yfinance] Direct extraction failed for {identifier}: {e}")
         return None
 
 
 def fetch_etf_composition(isin: str):
-    # Step 1: Try ISIN directly via etfpy
-    holdings = fetch_via_etfpy(isin)
+    # REDIRECT STDOUT TO STDERR during processing to catch any accidental prints from libs
+    original_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    
+    holdings = None
+    try:
+        # Step 1: Direct ISIN via etfpy
+        holdings = fetch_via_etfpy(isin)
 
-    # Step 2: Try resolve ISIN to Ticker, then retry etfpy
-    ticker = None
-    if holdings is None:
-        ticker = isin_to_ticker(isin)
-        if ticker:
-            holdings = fetch_via_etfpy(ticker)
+        # Step 2: Resolve ISIN to Ticker, then retry etfpy
+        ticker = None
+        if holdings is None:
+            ticker = isin_to_ticker(isin)
+            if ticker:
+                holdings = fetch_via_etfpy(ticker)
 
-    # Step 3: NEW Fallback — direct yfinance extraction (highest coverage, last resort)
-    if holdings is None:
-        # Try it for the ISIN first
-        holdings = fetch_via_yfinance_direct(isin)
-        # If still none and we found a ticker, try the ticker
-        if holdings is None and ticker:
-            holdings = fetch_via_yfinance_direct(ticker)
+        # Step 3: Direct yfinance extraction (as ISIN or Ticker)
+        if holdings is None:
+            holdings = fetch_via_yfinance_direct(isin)
+            if holdings is None and ticker:
+                holdings = fetch_via_yfinance_direct(ticker)
 
-    if holdings is None:
-        logger.error(f"[❌ Not Found] No holdings found for ISIN {isin} via etfpy or direct yfinance fallback.")
+    except Exception as e:
+        logger.error(f"[🔥 Critical] Uncaught error during extraction: {e}")
+    finally:
+        # RESTORE STDOUT
+        sys.stdout = original_stdout
+
+    if holdings:
+        # Final output is the ONLY thing allowed on stdout
+        print(json.dumps(holdings))
+        sys.exit(0)
+    else:
+        logger.error(f"[❌ Not Found] Could not find holdings for {isin} via any provider.")
         sys.exit(2)
-
-    print(json.dumps(holdings))
-    sys.exit(0)
 
 
 if __name__ == "__main__":
