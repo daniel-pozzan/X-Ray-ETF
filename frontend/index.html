@@ -39,14 +39,27 @@
             <section class="search-section" aria-label="ETF Search">
                 <form id="search-form" autocomplete="off">
                     <div class="search-bar">
-                        <input
-                            type="text"
-                            id="isin-input"
-                            placeholder="e.g. IE00B4L5Y983"
-                            maxlength="12"
-                            aria-label="ETF ISIN"
-                            spellcheck="false"
-                        />
+                        <div class="search-input-group">
+                            <input
+                                type="text"
+                                id="isin-input"
+                                placeholder="ISIN (e.g. IE00B4L5Y983)"
+                                maxlength="12"
+                                aria-label="ETF ISIN"
+                                spellcheck="false"
+                            />
+                        </div>
+                        <span class="search-separator">or</span>
+                        <div class="search-input-group">
+                            <input
+                                type="text"
+                                id="ticker-input"
+                                placeholder="Ticker (e.g. CSPX)"
+                                maxlength="10"
+                                aria-label="ETF Ticker"
+                                spellcheck="false"
+                            />
+                        </div>
                         <button type="submit" id="search-btn">Analyse</button>
                     </div>
                 </form>

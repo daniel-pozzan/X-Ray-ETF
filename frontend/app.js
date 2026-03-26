@@ -11,7 +11,8 @@ let currentSort = { col: 'weight', dir: -1 }; // Default: Weight descending
 
 const DOM = {
     form: document.getElementById('search-form'),
-    input: document.getElementById('isin-input'),
+    isinInput: document.getElementById('isin-input'),
+    tickerInput: document.getElementById('ticker-input'),
     btn: document.getElementById('search-btn'),
     statusBox: document.getElementById('status-box'),
     results: document.getElementById('results'),
@@ -28,9 +29,13 @@ const DOM = {
 // ──────────────────────────────────────────────
 DOM.form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const isin = DOM.input.value.trim().toUpperCase();
-    if (!isin || isin.length < 5) return;
-    await fetchComposition(isin);
+    const isin = DOM.isinInput.value.trim().toUpperCase();
+    const ticker = DOM.tickerInput.value.trim().toUpperCase();
+    
+    const id = ticker || isin;
+    if (!id || id.length < 3) return;
+    
+    await fetchComposition(id);
 });
 
 DOM.sortableTh.forEach(th => {
@@ -49,7 +54,7 @@ DOM.sortableTh.forEach(th => {
 // ──────────────────────────────────────────────
 //  Data Fetching
 // ──────────────────────────────────────────────
-async function fetchComposition(isin) {
+async function fetchComposition(identifier) {
     showStatus('Analyzing ETF structure...', 'loading');
     DOM.results.classList.add('hidden');
     DOM.partialWarning.classList.add('hidden');
@@ -57,7 +62,7 @@ async function fetchComposition(isin) {
     DOM.btn.disabled = true;
 
     try {
-        const response = await fetch(`/api/etf/${isin}`);
+        const response = await fetch(`/api/etf/${identifier}`);
         const data = await response.json();
 
         if (!response.ok) {

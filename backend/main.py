@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import asyncio
+from asyncio import subprocess
 import json
 import logging
 import os
@@ -39,26 +40,26 @@ def _get_db() -> sqlite3.Connection:
     return conn
 
 
-def _cache_get(isin: str) -> dict | None:
+def _cache_get(identifier: str) -> dict | None:
     """Return cached entry or None if expired / missing."""
     with _get_db() as conn:
         row = conn.execute(
             "SELECT data, partial, fetched_at FROM etf_cache WHERE isin = ?",
-            (isin.upper(),),
+            (identifier.upper(),),
         ).fetchone()
     if row is None:
         return None
     data, partial, fetched_at = row
     if time.time() - fetched_at > CACHE_TTL_SECONDS:
-        logger.info(f"[Cache] Entry for {isin} is stale (>30 days). Evicting.")
+        logger.info(f"[Cache] Entry for {identifier} is stale (>30 days). Evicting.")
         with _get_db() as conn:
-            conn.execute("DELETE FROM etf_cache WHERE isin = ?", (isin.upper(),))
+            conn.execute("DELETE FROM etf_cache WHERE isin = ?", (identifier.upper(),))
         return None
-    logger.info(f"[Cache] HIT for {isin}")
+    logger.info(f"[Cache] HIT for {identifier}")
     return {"holdings": json.loads(data), "partial": bool(partial)}
 
 
-def _cache_set(isin: str, holdings: list, partial: bool) -> None:
+def _cache_set(identifier: str, holdings: list, partial: bool) -> None:
     """Persist holdings to the cache."""
     with _get_db() as conn:
         conn.execute(
@@ -70,9 +71,9 @@ def _cache_set(isin: str, holdings: list, partial: bool) -> None:
                 partial    = excluded.partial,
                 fetched_at = excluded.fetched_at
             """,
-            (isin.upper(), json.dumps(holdings), int(partial), int(time.time())),
+            (identifier.upper(), json.dumps(holdings), int(partial), int(time.time())),
         )
-    logger.info(f"[Cache] Stored {len(holdings)} holdings for {isin} (partial={partial})")
+    logger.info(f"[Cache] Stored {len(holdings)} holdings for {identifier} (partial={partial})")
 
 
 def _is_partial(holdings: list) -> bool:
@@ -110,16 +111,16 @@ async def serve_not_found():
 # ──────────────────────────────────────────────
 #  ETF API
 # ──────────────────────────────────────────────
-@app.get("/api/etf/{isin}")
-async def get_etf_composition(isin: str):
-    isin = isin.strip().upper()
-    logger.info(f"[API] Request for ISIN: {isin}")
+@app.get("/api/etf/{identifier}")
+async def get_etf_composition(identifier: str):
+    identifier = identifier.strip().upper()
+    logger.info(f"[API] Request for identifier: {identifier}")
 
     # 1. Try cache first
-    cached = _cache_get(isin)
+    cached = _cache_get(identifier)
     if cached:
         return {
-            "isin": isin,
+            "identifier": identifier,
             "holdings": cached["holdings"],
             "partialData": cached["partial"],
             "fromCache": True,
@@ -128,32 +129,32 @@ async def get_etf_composition(isin: str):
     # 2. Run the execution script
     script_path = os.path.join(_BASE_DIR, "../execution/fetch_etf_composition.py")
     process = await asyncio.create_subprocess_exec(
-        "python", script_path, isin,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        "python", script_path, identifier,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     stdout, stderr = await process.communicate()
 
     if process.returncode == 2:
-        logger.warning(f"[API] ETF Not Found: {isin}. stderr: {stderr.decode().strip()}")
+        logger.warning(f"[API] ETF Not Found: {identifier}. stderr: {stderr.decode().strip()}")
         raise HTTPException(status_code=404, detail="ETF not found or not supported")
     elif process.returncode != 0:
-        logger.error(f"[API] Script error for {isin}. stderr: {stderr.decode()}")
+        logger.error(f"[API] Script error for {identifier}. stderr: {stderr.decode()}")
         raise HTTPException(status_code=500, detail="Failed to fetch ETF composition.")
 
     try:
         holdings = json.loads(stdout.decode())
     except json.JSONDecodeError:
-        logger.error(f"[API] JSON decode error for {isin}. stdout: {stdout.decode()[:500]}")
+        logger.error(f"[API] JSON decode error for {identifier}. stdout: {stdout.decode()[:500]}")
         raise HTTPException(status_code=500, detail="Failed to parse composition data.")
 
     partial = _is_partial(holdings)
 
     # 3. Store in cache
-    _cache_set(isin, holdings, partial)
+    _cache_set(identifier, holdings, partial)
 
     return {
-        "isin": isin,
+        "identifier": identifier,
         "holdings": holdings,
         "partialData": partial,
         "fromCache": False,
